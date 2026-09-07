@@ -6,12 +6,22 @@
 #           claude-local stop               stop the server, free ~20 GB RAM
 #           claude-local status             health + loaded model
 #           claude-local logs               tail the server log
+#           claude-local start              start the server only
+#           claude-local dashboard          web dashboard on http://127.0.0.1:8001
 set -euo pipefail
 
 # --- profile -------------------------------------------------------------
-MODEL="${CLAUDE_LOCAL_MODEL:-qwen3.8-27b-4bit}"
-PORT="${CLAUDE_LOCAL_PORT:-8000}"
-EFFORT="${CLAUDE_LOCAL_EFFORT:-low}"
+# Profile file (written by the dashboard) holds MODEL, PORT, EFFORT as
+# KEY=value lines. Env vars override it for one run.
+PROFILE_FILE="${HOME}/.config/claude-local/profile"
+if [ -f "$PROFILE_FILE" ]; then
+  # shellcheck disable=SC1090
+  . "$PROFILE_FILE"
+fi
+MODEL="${CLAUDE_LOCAL_MODEL:-${MODEL:-qwen3.8-27b-4bit}}"
+PORT="${CLAUDE_LOCAL_PORT:-${PORT:-8000}}"
+EFFORT="${CLAUDE_LOCAL_EFFORT:-${EFFORT:-low}}"
+DASHBOARD_PORT="${CLAUDE_LOCAL_DASHBOARD_PORT:-8001}"
 BASE_URL="http://127.0.0.1:${PORT}"
 LOG_DIR="${HOME}/.cache/claude-local"
 LOG_FILE="${LOG_DIR}/server.log"
@@ -35,6 +45,32 @@ SERVE_FLAGS=(
 mkdir -p "$LOG_DIR"
 
 healthy() { curl -sf "${BASE_URL}/health" >/dev/null 2>&1; }
+
+# --- start server if down ------------------------------------------------
+start_server() {
+  healthy && return 0
+  echo "starting rapid-mlx serve ${MODEL} (log: ${LOG_FILE})"
+  nohup rapid-mlx serve "$MODEL" "${SERVE_FLAGS[@]}" >"$LOG_FILE" 2>&1 &
+  echo $! >"$PID_FILE"
+  disown
+
+  # First run downloads ~20 GB; run `rapid-mlx pull qwen3.8-27b-4bit` first.
+  local waited=0 limit=600
+  until healthy; do
+    if ! kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+      echo "server exited. last lines of ${LOG_FILE}:" >&2
+      tail -n 20 "$LOG_FILE" >&2
+      return 1
+    fi
+    if [ "$waited" -ge "$limit" ]; then
+      echo "server not healthy after ${limit} s. See ${LOG_FILE}" >&2
+      return 1
+    fi
+    sleep 2
+    waited=$((waited + 2))
+  done
+  echo "server ready after ${waited} s"
+}
 
 case "${1:-}" in
   stop)
@@ -65,8 +101,25 @@ case "${1:-}" in
   logs)
     exec tail -f "$LOG_FILE"
     ;;
+  start)
+    command -v rapid-mlx >/dev/null || { echo "rapid-mlx not found. Install: brew install rapid-mlx" >&2; exit 1; }
+    start_server
+    exit $?
+    ;;
+  dashboard)
+    command -v python3 >/dev/null || { echo "python3 not found" >&2; exit 1; }
+    shift
+    exec env \
+      CLAUDE_LOCAL_LAUNCHER="$SELF" \
+      CLAUDE_LOCAL_BASE_URL="$BASE_URL" \
+      CLAUDE_LOCAL_LOG_FILE="$LOG_FILE" \
+      CLAUDE_LOCAL_PID_FILE="$PID_FILE" \
+      CLAUDE_LOCAL_PROFILE_FILE="$PROFILE_FILE" \
+      CLAUDE_LOCAL_DASHBOARD_PORT="$DASHBOARD_PORT" \
+      python3 "${REPO_DIR}/dashboard/server.py" "$@"
+    ;;
   help|--help|-h)
-    echo "claude-local [claude args...] | stop | status | logs"
+    echo "claude-local [claude args...] | stop | status | logs | start | dashboard"
     exit 0
     ;;
 esac
@@ -76,31 +129,7 @@ command -v rapid-mlx >/dev/null || { echo "rapid-mlx not found. Install: brew in
 command -v claude >/dev/null || { echo "claude not found. Install: npm install -g @anthropic-ai/claude-code" >&2; exit 1; }
 [ -f "$SETTINGS_FILE" ] || { echo "missing $SETTINGS_FILE" >&2; exit 1; }
 
-# --- start server if down ------------------------------------------------
-if ! healthy; then
-  echo "starting rapid-mlx serve ${MODEL} (log: ${LOG_FILE})"
-  nohup rapid-mlx serve "$MODEL" "${SERVE_FLAGS[@]}" >"$LOG_FILE" 2>&1 &
-  echo $! >"$PID_FILE"
-  disown
-
-  # First run downloads ~20 GB; run `rapid-mlx pull qwen3.8-27b-4bit` first.
-  waited=0
-  limit=600
-  until healthy; do
-    if ! kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-      echo "server exited. last lines of ${LOG_FILE}:" >&2
-      tail -n 20 "$LOG_FILE" >&2
-      exit 1
-    fi
-    if [ "$waited" -ge "$limit" ]; then
-      echo "server not healthy after ${limit} s. See ${LOG_FILE}" >&2
-      exit 1
-    fi
-    sleep 2
-    waited=$((waited + 2))
-  done
-  echo "server ready after ${waited} s"
-fi
+start_server || exit 1
 
 # --- launch Claude Code --------------------------------------------------
 # Env vars are scoped to this process only; the normal `claude` is untouched.

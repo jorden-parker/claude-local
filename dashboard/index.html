@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>claude-local dashboard</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --fg:#1b1f24; --muted:#6b7280; --line:#e5e7eb;
+          --good:#15803d; --warn:#b45309; --bad:#b91c1c; --info:#1d4ed8; --mono:ui-monospace,Menlo,monospace; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1115; --card:#181b21; --fg:#e6e8eb; --muted:#9aa3ad; --line:#2a2f37;
+            --good:#4ade80; --warn:#fbbf24; --bad:#f87171; --info:#60a5fa; }
+  }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui,sans-serif; }
+  main { max-width:1100px; margin:0 auto; padding:16px; display:grid; gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  h1 { font-size:16px; margin:0; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:0 0 8px; }
+  .muted { color:var(--muted); }
+  .mono { font-family:var(--mono); font-size:12px; }
+  #verdict { font-size:18px; font-weight:600; padding:14px; border-left:6px solid var(--muted); }
+  #verdict.good { border-color:var(--good); } #verdict.warn { border-color:var(--warn); }
+  #verdict.bad { border-color:var(--bad); }   #verdict.info { border-color:var(--info); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
+  .tile b { display:block; font-size:22px; font-weight:600; }
+  .tile span { color:var(--muted); font-size:12px; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--muted); }
+  .dot.up { background:var(--good); } .dot.down { background:var(--bad); }
+  .badge { font-size:11px; padding:2px 7px; border-radius:99px; border:1px solid var(--line); color:var(--muted); }
+  .badge.good { color:var(--good); border-color:var(--good); } .badge.warn { color:var(--warn); border-color:var(--warn); }
+  .badge.bad { color:var(--bad); border-color:var(--bad); }
+  table { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12px; }
+  th,td { text-align:right; padding:4px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th:first-child,td:first-child { text-align:left; }
+  tr.miss td { color:var(--bad); } tr.slow td:nth-child(6) { color:var(--warn); }
+  .scroll { overflow-x:auto; }
+  pre { margin:0; max-height:320px; overflow:auto; font-family:var(--mono); font-size:11px; white-space:pre-wrap; word-break:break-all; }
+  button { font:inherit; padding:6px 12px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer; }
+  button:hover { border-color:var(--fg); } button:disabled { opacity:.5; cursor:default; }
+  button.danger { color:var(--bad); }
+  input,select { font:inherit; padding:5px 8px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--fg); }
+  form { display:flex; gap:8px; flex-wrap:wrap; align-items:end; }
+  label { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--muted); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  #action_out { margin-top:8px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1><span id="dot" class="dot"></span> claude-local
+      <span id="model" class="mono muted"></span>
+      <span id="version" class="badge"></span>
+      <span id="mock" class="badge warn" hidden>mock data</span>
+      <span id="uptime" class="muted" style="margin-left:auto"></span>
+    </h1>
+    <div id="flags" class="mono muted" style="margin-top:6px"></div>
+  </div>
+
+  <div id="verdict" class="card info">Connecting...</div>
+
+  <div class="card">
+    <h2>Live</h2>
+    <div class="grid">
+      <div class="tile"><b id="gen_tps">-</b><span>generation tok/s <span id="mtp_badge" class="badge"></span></span></div>
+      <div class="tile"><b id="prompt_tps">-</b><span>prefill tok/s</span></div>
+      <div class="tile"><b id="running">-</b><span>running / waiting</span></div>
+      <div class="tile"><b id="cache_rate">-</b><span>prefix cache hit rate</span></div>
+      <div class="tile"><b id="metal">-</b><span>Metal memory GB (active / peak)</span></div>
+      <div class="tile"><b id="mem_level">-</b><span>memory pressure</span></div>
+      <div class="tile"><b id="swap">-</b><span>swap-ins since last poll</span></div>
+      <div class="tile"><b id="free">-</b><span>free GB</span></div>
+    </div>
+    <div id="mtp_line" class="mono muted" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <h2>Requests, newest first <span class="muted">(red = cache miss, orange tok/s = MTP likely off)</span></h2>
+    <div class="scroll"><table>
+      <thead><tr><th>time</th><th>prompt</th><th>cached</th><th>prefilled</th><th>completion</th><th>tok/s</th><th>seconds</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="7" class="muted">no requests seen since the dashboard started</td></tr></tbody>
+    </table></div>
+  </div>
+
+  <div class="card">
+    <h2>Control</h2>
+    <div class="row">
+      <button id="b_start">Start</button>
+      <button id="b_stop" class="danger">Stop</button>
+      <button id="b_restart" class="danger">Restart</button>
+      <span id="action" class="muted"></span>
+    </div>
+    <form id="profile" style="margin-top:12px">
+      <label>model <input name="MODEL" size="22" placeholder="qwen3.8-27b-4bit"></label>
+      <label>port <input name="PORT" size="6" placeholder="8000"></label>
+      <label>effort <select name="EFFORT"><option value="">(default)</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label>
+      <button type="submit" class="danger">Save profile and restart</button>
+    </form>
+    <div class="muted" style="margin-top:6px;font-size:12px">Profile file: <span id="profile_path" class="mono"></span>. Env vars still override it for one run.</div>
+    <pre id="action_out" hidden></pre>
+  </div>
+
+  <div class="card">
+    <h2>Server log, last 200 lines</h2>
+    <pre id="log"></pre>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (v, d = 0) => v == null ? '-' : Number(v).toLocaleString(undefined, { maximumFractionDigits: d });
+const ago = t => { const s = Math.max(0, Date.now() / 1000 - t); return s < 60 ? `${s | 0}s ago` : s < 3600 ? `${(s / 60) | 0}m ago` : `${(s / 3600) | 0}h ago`; };
+let profileDirty = false, thresholds = {};
+
+function render(s) {
+  thresholds = s.thresholds;
+  $('dot').className = 'dot ' + (s.up ? 'up' : 'down');
+  $('model').textContent = s.models.join(', ') || (s.up ? '' : 'server down');
+  $('version').textContent = s.version || '';
+  $('mock').hidden = !s.mock;
+  $('flags').textContent = s.flags ? 'rapid-mlx ' + s.flags + (s.pid ? `  (pid ${s.pid})` : '') : '';
+  const st = s.status || {};
+  $('uptime').textContent = st.uptime_s != null ? `up ${fmt(st.uptime_s / 60)} min` : '';
+  $('verdict').className = 'card ' + s.verdict.level;
+  $('verdict').textContent = s.verdict.text;
+
+  $('gen_tps').textContent = fmt(st.generation_tps, 1);
+  $('prompt_tps').textContent = fmt(st.prompt_tps, 0);
+  $('running').textContent = `${fmt(st.num_running)} / ${fmt(st.num_waiting)}`;
+  $('cache_rate').textContent = s.cache && s.cache.rate != null ? `${fmt(s.cache.rate * 100)}%` : '-';
+  $('metal').textContent = st.metal_active_memory_gb != null ? `${fmt(st.metal_active_memory_gb, 1)} / ${fmt(st.metal_peak_memory_gb, 1)}` : '-';
+  const lvl = s.memory.level;
+  $('mem_level').textContent = lvl == null ? '-' : lvl >= 4 ? 'critical' : lvl >= 2 ? 'warning' : 'normal';
+  $('mem_level').style.color = lvl >= 4 ? 'var(--bad)' : lvl >= 2 ? 'var(--warn)' : '';
+  $('swap').textContent = fmt(s.swapins_delta);
+  $('swap').style.color = s.swapins_delta > 0 ? 'var(--bad)' : '';
+  $('free').textContent = fmt(s.memory.free_gb, 1);
+
+  const last = s.requests[0];
+  const b = $('mtp_badge');
+  if (last && last.tps != null) {
+    const on = last.tps >= thresholds.mtp_tps;
+    b.textContent = on ? 'MTP on' : 'MTP off?'; b.className = 'badge ' + (on ? 'good' : 'warn');
+  } else { b.textContent = ''; b.className = 'badge'; }
+  $('mtp_line').textContent = s.mtp_line ? 'startup: ' + s.mtp_line : 'no MTP line found in server log yet';
+
+  if (s.requests.length) {
+    $('rows').innerHTML = s.requests.map(r => {
+      const miss = r.prompt > 0 && r.cached != null && r.cached / r.prompt < thresholds.cache_ratio;
+      const slow = r.tps != null && r.tps < thresholds.mtp_tps;
+      const pre = r.prompt != null && r.cached != null ? r.prompt - r.cached : null;
+      return `<tr class="${miss ? 'miss' : ''} ${slow ? 'slow' : ''}"><td>${ago(r.t)}${r.n > 1 ? ` (${r.n} overlapped)` : ''}</td><td>${fmt(r.prompt)}</td><td>${fmt(r.cached)}</td><td>${fmt(pre)}</td><td>${fmt(r.completion)}</td><td>${fmt(r.tps, 1)}</td><td>${fmt(r.duration, 1)}</td></tr>`;
+    }).join('');
+  }
+
+  const busy = !!s.action;
+  for (const id of ['b_start', 'b_stop', 'b_restart']) $(id).disabled = busy;
+  $('profile').querySelector('button').disabled = busy;
+  $('action').textContent = busy ? s.action + '... (start can take minutes on first load)' : '';
+  $('action_out').hidden = !s.action_out; $('action_out').textContent = s.action_out;
+  if (!profileDirty) for (const k of ['MODEL', 'PORT', 'EFFORT']) $('profile').elements[k].value = s.profile[k] || '';
+}
+
+async function tick() {
+  try { render(await (await fetch('/api/state')).json()); }
+  catch (e) { $('verdict').className = 'card bad'; $('verdict').textContent = 'Dashboard server unreachable. Is `claude-local dashboard` running?'; }
+}
+async function tickLog() {
+  try { const j = await (await fetch('/api/log?n=200')).json(); const p = $('log');
+    const atBottom = p.scrollTop + p.clientHeight >= p.scrollHeight - 4;
+    p.textContent = j.lines.join('\n'); if (atBottom) p.scrollTop = p.scrollHeight; } catch (e) {}
+}
+async function post(path, body) {
+  const j = await (await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) })).json();
+  if (j.error) alert(j.error); tick();
+}
+$('b_start').onclick = () => post('/api/start');
+$('b_stop').onclick = () => confirm('Stop the server? Any running Claude Code session loses its connection.') && post('/api/stop');
+$('b_restart').onclick = () => confirm('Restart the server? Any running Claude Code session loses its connection.') && post('/api/restart');
+$('profile').oninput = () => { profileDirty = true; };
+$('profile').onsubmit = e => {
+  e.preventDefault();
+  if (!confirm('Save profile and restart the server?')) return;
+  const f = $('profile').elements;
+  post('/api/profile', { MODEL: f.MODEL.value, PORT: f.PORT.value, EFFORT: f.EFFORT.value, restart: true });
+  profileDirty = false;
+};
+$('profile_path').textContent = '~/.config/claude-local/profile';
+tick(); tickLog(); setInterval(tick, 2000); setInterval(tickLog, 2000);
+</script>
+</body>
+</html>

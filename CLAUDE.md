@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A launcher for running Claude Code against a local Qwen3.8-27B served by
-Rapid-MLX on Apple Silicon. Two bash scripts, one settings file, no build.
+Rapid-MLX on Apple Silicon. Two bash scripts, one settings file, a stdlib-Python dashboard, no build.
 See `README.md` for the rationale behind each tuning choice and `CONTEXT.md`
 for the project glossary (local model, runtime, launcher, profile, MTP).
 
@@ -16,7 +16,13 @@ the 16 GB Mac, so the server cannot run here; changes are verified on the work M
 
 - `claude-local`: the launcher. Starts `rapid-mlx serve` if `/health` is down,
   waits up to 600 s, then `exec`s `claude` with env vars scoped to that process.
-  Subcommands: `stop`, `status`, `logs`. Anything else passes through to `claude`.
+  Subcommands: `stop`, `status`, `logs`, `start` (server only), `dashboard`.
+  Anything else passes through to `claude`.
+- `dashboard/server.py` + `dashboard/index.html`: local web page on port 8001.
+  Polls the runtime's `/metrics`, `/v1/status`, `/health` plus `sysctl`/`vm_stat`,
+  shows a verdict line, per-request token/cache/tok-per-second rows, and
+  start/stop/restart/profile controls that shell out to the launcher.
+  Python 3 stdlib only. `--mock` serves fake data so it runs on the 16 GB Mac.
 - `settings.local-model.json`: passed via `claude --settings`. Denies `Agent`,
   `Workflow`, `/code-review`, `/subtask`; disables workflows, agent view, and
   background tasks. Subagents are off because one local model cannot serve
@@ -32,8 +38,12 @@ the 16 GB Mac, so the server cannot run here; changes are verified on the work M
 - All model role env vars (`ANTHROPIC_MODEL`, `*_OPUS_MODEL`, `*_SONNET_MODEL`,
   `*_HAIKU_MODEL`, `*_FABLE_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`) point at the
   same alias. Only one model is loaded.
-- Profile overrides are env vars: `CLAUDE_LOCAL_MODEL`, `CLAUDE_LOCAL_PORT`,
-  `CLAUDE_LOCAL_EFFORT`. `SERVE_FLAGS` is edited in the script.
+- Profile overrides: env vars `CLAUDE_LOCAL_MODEL`, `CLAUDE_LOCAL_PORT`,
+  `CLAUDE_LOCAL_EFFORT` win over `~/.config/claude-local/profile` (`KEY=value`,
+  written by the dashboard), which wins over the script defaults. `SERVE_FLAGS`
+  is edited in the script; `start_server` is the only place that launches it.
+- Verdict thresholds (plain decode 15 tok/s, MTP on above 25, cache miss below
+  50 % cached, long output above 2000 tokens) are constants in `server.py`.
 - The server outlives Claude Code on purpose. `claude-local stop` frees the RAM.
 - Server log and pid live in `~/.cache/claude-local/`.
 

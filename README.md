@@ -54,7 +54,31 @@ claude-local -p "hi"    # any claude args pass through
 claude-local status     # server health and loaded model
 claude-local logs       # tail the server log
 claude-local stop       # stop the server
+claude-local start      # start the server only, no Claude Code
+claude-local dashboard  # web dashboard on http://127.0.0.1:8001 (Ctrl-C stops it)
 ```
+
+## Dashboard
+
+`claude-local dashboard` serves one local page (Python 3 stdlib, no install)
+that answers "why is this turn slow?" at a glance:
+
+- **Verdict line**: cache miss, MTP likely off, memory pressure, or long output.
+  Rules and thresholds are constants at the top of `dashboard/server.py`.
+- **Per request** (last 20): prompt tokens, cached tokens, completion tokens,
+  tok/s, seconds. Built by diffing the runtime's `/metrics` counters each
+  second, so it is exact only when requests are serial (one Claude Code session).
+- **Live**: prefill and generation tok/s, Metal memory, prefix cache hit rate,
+  macOS memory pressure and swap-ins, the MTP line from the startup log.
+- **Control**: start, stop, restart, and edit the profile (model, port, effort).
+  Saving writes `~/.config/claude-local/profile` and restarts the server.
+- **Log tail**, last 200 lines.
+
+Thinking tokens are not exposed by Rapid-MLX. A huge completion count on a
+short turn is the proxy.
+
+`claude-local dashboard --mock` shows fake data for checking the page on a
+machine without Rapid-MLX. Port override: `CLAUDE_LOCAL_DASHBOARD_PORT`.
 
 ## Verify it works
 
@@ -84,10 +108,13 @@ The CLI flags `--disallowedTools Agent Workflow` are also passed as a belt-and-b
 
 ## Tuning
 
-Override via env vars, or edit the profile block at the top of `claude-local`:
+Override via env vars, the profile file `~/.config/claude-local/profile`
+(`KEY=value` lines: `MODEL`, `PORT`, `EFFORT`; written by the dashboard), or the
+profile block at the top of `claude-local`. Env vars win over the file.
 
 - `CLAUDE_LOCAL_MODEL`: any Rapid-MLX alias (`rapid-mlx models`). `qwen3.8-27b-8bit` is higher quality, about half the speed.
 - `CLAUDE_LOCAL_EFFORT`: `low`, `medium`, `high`, `xhigh`.
+- `CLAUDE_LOCAL_PORT`: server port, default `8000`. `CLAUDE_LOCAL_DASHBOARD_PORT`: default `8001`.
 - `SERVE_FLAGS` (in the script): see `rapid-mlx serve --help`. `--no-spec-decode` turns MTP off for A/B testing.
 
 Context: Rapid-MLX serves the model's native 256k window. Claude Code is capped
