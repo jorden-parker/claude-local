@@ -10,7 +10,7 @@ repos:
     rev: v0.10.0.1
     hooks:
       - id: shellcheck
-        files: ^claude-local$
+        files: ^(claude-local|install\.sh)$
         types: [file]
   - repo: local
     hooks:
@@ -18,4 +18,4 @@ repos:
         name: bash syntax check
         entry: bash -n
         language: system
-        files: ^claude-local$
+        files: ^(claude-local|install\.sh)$
