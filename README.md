@@ -105,6 +105,7 @@ machine without Rapid-MLX. Port override: `CLAUDE_LOCAL_DASHBOARD_PORT`.
 
 ```sh
 claude-local diagnose              # full run; sends 7 small probe requests
+claude-local diagnose --brief      # same probes, ~60 lines, fits in a chat message
 claude-local diagnose --no-probe   # read-only
 ```
 
@@ -158,6 +159,14 @@ profile block at the top of `claude-local`. Env vars win over the file.
 - `CLAUDE_LOCAL_EFFORT`: `low`, `medium`, `high`, `xhigh`.
 - `CLAUDE_LOCAL_PORT`: server port, default `8000`. `CLAUDE_LOCAL_DASHBOARD_PORT`: default `8001`.
 - `CLAUDE_LOCAL_SPEC_DECODE=0` (or `SPEC_DECODE=0` in the profile): drop `--speculative-config`, for A/B testing MTP.
+- `CLAUDE_LOCAL_ISOLATE_CONFIG=1`: give claude-local its own `CLAUDE_CONFIG_DIR`
+  (default `~/.config/claude-local/claude-home`, override with
+  `CLAUDE_LOCAL_CONFIG_DIR`). Use it if you see
+  `User OAuth refresh failed (HTTP 404)` at launch: Claude Code refreshes its
+  stored claude.ai login even when `ANTHROPIC_API_KEY` is set, and with
+  `ANTHROPIC_BASE_URL` pointed at rapid-mlx that refresh 404s. An isolated
+  config dir has no stored login to refresh. Off by default, because it also
+  hides your `~/.claude` global `CLAUDE.md`, settings, skills and history.
 - `SERVE_FLAGS` (in the script): see `rapid-mlx serve --help`.
 
 Context: Rapid-MLX serves the model's native 256k window. Claude Code is capped

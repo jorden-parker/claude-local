@@ -26,7 +26,8 @@ the 16 GB Mac, so the server cannot run here; changes are verified on the work M
 - `scripts/diagnose.sh`: one report answering "why was that turn slow?".
   Reads per-turn thinking tokens out of Claude Code's own transcript, checks
   whether MTP is on, probes the effort cap and the prefix cache. Bash plus
-  stdlib python3; `--no-probe` makes it read-only.
+  stdlib python3. `--brief` prints a ~60-line digest that fits in a chat
+  message; `--no-probe` makes it read-only.
 - `docs/why-turns-are-slow.md`: the findings behind that script. Read it before
   changing `SERVE_FLAGS` or the effort default.
 - `settings.local-model.json`: passed via `claude --settings`. Denies `Agent`,
@@ -55,7 +56,8 @@ the 16 GB Mac, so the server cannot run here; changes are verified on the work M
   `*_HAIKU_MODEL`, `*_FABLE_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`) point at the
   same alias. Only one model is loaded.
 - Profile overrides: env vars `CLAUDE_LOCAL_MODEL`, `CLAUDE_LOCAL_PORT`,
-  `CLAUDE_LOCAL_EFFORT`, `CLAUDE_LOCAL_SPEC_DECODE` win over `~/.config/claude-local/profile` (`KEY=value`,
+  `CLAUDE_LOCAL_EFFORT`, `CLAUDE_LOCAL_SPEC_DECODE`, `CLAUDE_LOCAL_ISOLATE_CONFIG`
+  win over `~/.config/claude-local/profile` (`KEY=value`,
   written by the dashboard), which wins over the script defaults. `SERVE_FLAGS`
   is edited in the script; `start_server` is the only place that launches it.
 - Verdict thresholds (plain decode 15 tok/s, MTP on above 25, cache miss below

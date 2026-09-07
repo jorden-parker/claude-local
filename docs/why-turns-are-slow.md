@@ -125,6 +125,33 @@ also not a thing — it produces the same warning.
 This costs no speed. It did mean the README's claim to cover "each path"
 was only true for `Agent` and `Workflow`.
 
+## Finding 4: the OAuth 404 banner at launch
+
+On the work Mac every launch shows:
+
+```
+API Error: User OAuth refresh failed (HTTP 404):
+{"error":{"message":"Not Found","type":"not_found_error","code":null,"param":null}}
+```
+
+Claude Code refreshes its stored claude.ai login on startup even when
+`ANTHROPIC_API_KEY` is set. The token endpoint is `/v1/oauth/token`, and with
+`ANTHROPIC_BASE_URL` pointed at rapid-mlx the refresh goes there and 404s.
+
+This is noise, not the ten minutes — the same screenshot shows the turn
+finishing in 0 s. But it is red text on every launch.
+
+`CLAUDE_LOCAL_ISOLATE_CONFIG=1` gives claude-local its own `CLAUDE_CONFIG_DIR`,
+which holds no login, so no refresh is attempted. Verified against a stub
+endpoint: with an isolated config dir the only path Claude Code touches is
+`/v1/messages`, and neither the OAuth warning nor the connectors warning
+appears. It is off by default because an isolated config dir also hides your
+`~/.claude` global `CLAUDE.md`, settings, skills and history.
+
+To confirm the refresh really is hitting the local server rather than
+Anthropic, look for an `oauth` line in `~/.cache/claude-local/server.log`;
+`scripts/diagnose.sh` section 7 checks for exactly that.
+
 ## Ruled out
 
 - **`--relocate-mid-conversation-system` busting the prefix cache.** Backwards:

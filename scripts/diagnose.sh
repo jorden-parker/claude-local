@@ -18,11 +18,14 @@
 set -euo pipefail
 
 PROBE=1
+BRIEF=0
 case "${1:-}" in
   --no-probe) PROBE=0 ;;
+  --brief) BRIEF=1 ;;
   "") ;;
-  *) echo "usage: $0 [--no-probe]" >&2; exit 2 ;;
+  *) echo "usage: $0 [--brief | --no-probe]" >&2; exit 2 ;;
 esac
+export BRIEF
 
 # --- config: same precedence as the launcher (env > profile > default) ------
 PROFILE_FILE="${HOME}/.config/claude-local/profile"
@@ -40,17 +43,24 @@ PID_FILE="${HOME}/.cache/claude-local/server.pid"
 OUT="diagnose-$(date +%Y%m%d-%H%M%S).txt"
 exec > >(tee "$OUT") 2>&1
 
-hr() { printf '\n== %s %s\n' "$1" "$(printf '=%.0s' $(seq 1 $((70 - ${#1}))))"; }
+hr() {
+  if [ "$BRIEF" = "1" ]; then printf '\n-- %s\n' "$1"
+  else printf '\n== %s %s\n' "$1" "$(printf '=%.0s' $(seq 1 $((70 - ${#1}))))"; fi
+}
 have() { command -v "$1" >/dev/null 2>&1; }
+# Sections that are only useful when reading the whole report.
+verbose() { [ "$BRIEF" = "0" ]; }
 
 # ---------------------------------------------------------------- 1. context
 hr "1. context"
 date
-sw_vers 2>/dev/null | tr '\n' ' '; echo
+verbose && { sw_vers 2>/dev/null | tr '\n' ' '; echo; }
 echo "hardware: $(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo '?'), $(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 )) GB"
 echo "resolved: MODEL=$MODEL PORT=$PORT EFFORT=$EFFORT"
-echo "profile file: $PROFILE_FILE"
-if [ -f "$PROFILE_FILE" ]; then sed 's/^/  /' "$PROFILE_FILE"; else echo "  (absent, so defaults apply)"; fi
+if verbose; then
+  echo "profile file: $PROFILE_FILE"
+  if [ -f "$PROFILE_FILE" ]; then sed 's/^/  /' "$PROFILE_FILE"; else echo "  (absent, so defaults apply)"; fi
+fi
 for v in CLAUDE_LOCAL_MODEL CLAUDE_LOCAL_PORT CLAUDE_LOCAL_EFFORT ANTHROPIC_MODEL ANTHROPIC_BASE_URL; do
   [ -n "${!v:-}" ] && echo "env $v=${!v}"
 done
@@ -117,10 +127,12 @@ if not rows:
     print("this instead:  grep -ho '\"model\":\"[^\"]*\"' ~/.claude/projects/*/*.jsonl | sort | uniq -c")
     raise SystemExit(0)
 
+BRIEF = os.environ.get("BRIEF") == "1"
 rows.sort(key=lambda r: r["t"] or 0)
-tail = rows[-20:]
+tail = rows[-5:] if BRIEF else rows[-20:]
 print(f"{len(rows)} local-model turns on record; showing last {len(tail)}.")
-print("thinkTok = exact if the runtime reports it; thinkCh = characters in thinking blocks.\n")
+if not BRIEF:
+    print("thinkTok = exact if the runtime reports it; thinkCh = characters in thinking blocks.\n")
 head = f"{'when':<20}{'dur_s':>8}{'in':>9}{'cacheRd':>9}{'out':>8}{'thinkTok':>10}{'thinkCh':>9}{'textCh':>8}{'tools':>6}{'tok/s':>8}"
 print(head)
 print("-" * len(head))
@@ -156,24 +168,28 @@ if curl -sf -m 3 "${BASE_URL}/health" >/dev/null 2>&1; then
 else
   echo "health: DOWN on ${BASE_URL} -- start it with 'claude-local start', then re-run."
 fi
-echo "--- actual serve flags (what is running, not what the script says) ---"
-pgrep -fl "rapid-mlx serve" || echo "(no rapid-mlx serve process)"
-[ -f "$PID_FILE" ] && echo "pid file: $(cat "$PID_FILE")"
-echo "--- /v1/models ---"
-curl -sf -m 3 "${BASE_URL}/v1/models" 2>/dev/null | head -c 800 || echo "(no answer)"
-echo
+if verbose; then
+  echo "--- actual serve flags (what is running, not what the script says) ---"
+  pgrep -fl "rapid-mlx serve" || echo "(no rapid-mlx serve process)"
+  [ -f "$PID_FILE" ] && echo "pid file: $(cat "$PID_FILE")"
+  echo "--- /v1/models ---"
+  curl -sf -m 3 "${BASE_URL}/v1/models" 2>/dev/null | head -c 800 || echo "(no answer)"
+  echo
+fi
 echo "--- /v1/status ---"
-curl -sf -m 3 "${BASE_URL}/v1/status" 2>/dev/null | head -c 800 || echo "(no answer)"
+curl -sf -m 3 "${BASE_URL}/v1/status" 2>/dev/null | head -c 400 || echo "(no answer)"
 echo
 
 hr "4. model profile and MTP"
 # `rapid-mlx info` is the authority on whether this alias gets speculative
 # decoding for free. For qwen3.8-27b-4bit it does NOT: the arch is hybrid, so
 # spec decode is off and MTP is an opt-in sidecar behind --speculative-config.
-if have rapid-mlx; then
+if ! have rapid-mlx; then
+  echo "(rapid-mlx not on PATH)"
+elif verbose; then
   rapid-mlx info "$MODEL" 2>&1 | sed -n '1,22p'
 else
-  echo "(rapid-mlx not on PATH)"
+  rapid-mlx info "$MODEL" 2>&1 | grep -iE 'Spec decode|MTP path|Architecture' || true
 fi
 echo "--- is --speculative-config actually on the running process? ---"
 if pgrep -fl "rapid-mlx serve" 2>/dev/null | grep -q -- "--speculative-config"; then
@@ -192,24 +208,40 @@ else
   printf '%s\n' "$M_BEFORE" | grep -iE '^[a-z_]*(spec|draft|accept)' || echo "(no spec-decode metrics at all)"
   echo "--- prefix cache. misses climbing once per turn = every turn re-prefills ---"
   printf '%s\n' "$M_BEFORE" | grep -iE '^[a-z_]*(prefix|cache)' || echo "(no cache metrics)"
-  echo "--- requests ---"
-  printf '%s\n' "$M_BEFORE" | grep -iE '^[a-z_]*requests' || echo "(no request metrics)"
-  echo "--- every metric name exposed (the dashboard guesses at these) ---"
-  { printf '%s\n' "$M_BEFORE" | grep -oE '^[a-zA-Z_:][a-zA-Z0-9_:]*' || true; } | sort -u | tr '\n' ' '
-  echo
+  if verbose; then
+    echo "--- requests ---"
+    printf '%s\n' "$M_BEFORE" | grep -iE '^[a-z_]*requests' || echo "(no request metrics)"
+    echo "--- every metric name exposed (the dashboard guesses at these) ---"
+    { printf '%s\n' "$M_BEFORE" | grep -oE '^[a-zA-Z_:][a-zA-Z0-9_:]*' || true; } | sort -u | tr '\n' ' '
+    echo
+  fi
 fi
 
 hr "6. memory and swap"
-memory_pressure 2>/dev/null | tail -5 || echo "(memory_pressure unavailable)"
-vm_stat 2>/dev/null | grep -iE 'swapin|swapout|compress|pageout' || true
+if verbose; then
+  memory_pressure 2>/dev/null | tail -5 || echo "(memory_pressure unavailable)"
+  vm_stat 2>/dev/null | grep -iE 'swapin|swapout|compress|pageout' || true
+else
+  memory_pressure 2>/dev/null | grep -i 'free percentage' || true
+  vm_stat 2>/dev/null | grep -iE 'swapin|swapout' | tr '\n' ' ' || true; echo
+fi
 sysctl vm.swapusage 2>/dev/null || true
 rmpid="$(pgrep -f 'rapid-mlx serve' | head -1 || true)"
 [ -n "$rmpid" ] && ps -o rss= -p "$rmpid" | awk '{printf "rapid-mlx RSS: %.1f GB\n", $1/1048576}'
 
 hr "7. notable log lines"
 if [ -f "$LOG_FILE" ]; then
-  grep -iE 'error|warn|cancel|abort|disconnect|timeout|oom|out of memory|swap|spec|mtp|draft' "$LOG_FILE" \
-    | tail -30 | cut -c1-300 || echo "(none)"
+  # An /v1/oauth/token line here means Claude Code sent its user-OAuth refresh
+  # to ANTHROPIC_BASE_URL, i.e. to this server, which 404s it. That produces the
+  # red "User OAuth refresh failed (HTTP 404)" banner at launch.
+  if grep -qi 'oauth' "$LOG_FILE" 2>/dev/null; then
+    echo "OAUTH: this server was asked for an OAuth token endpoint:"
+    grep -i 'oauth' "$LOG_FILE" | tail -3 | cut -c1-200
+    echo "  -> set CLAUDE_LOCAL_ISOLATE_CONFIG=1 to give claude-local its own"
+    echo "     CLAUDE_CONFIG_DIR, which has no stored login to refresh."
+  fi
+  grep -iE 'error|warn|cancel|abort|disconnect|timeout|oom|out of memory|swap|spec|mtp|draft|oauth' "$LOG_FILE" \
+    | tail -"$( [ "$BRIEF" = 1 ] && echo 6 || echo 30 )" | cut -c1-300 || echo "(none)"
 else
   echo "no log at $LOG_FILE"
 fi
@@ -227,7 +259,9 @@ hr "8. probes"
 python3 - "$BASE_URL" "$MODEL" <<'PY'
 import json, time, urllib.error, urllib.request
 
+import os
 base, model = __import__("sys").argv[1], __import__("sys").argv[2]
+BRIEF = os.environ.get("BRIEF") == "1"
 HEADERS = {"content-type": "application/json", "x-api-key": "local",
            "anthropic-version": "2023-06-01"}
 
@@ -284,6 +318,11 @@ def send(label, messages, max_tokens, extra=None):
          "miss": (after.get("prefix_cache_misses_total", 0) - before.get("prefix_cache_misses_total", 0)),
          "saved": (after.get("prefix_cache_tokens_saved_total", 0) - before.get("prefix_cache_tokens_saved_total", 0))}
     tps = (out_tok / dur) if (out_tok and dur) else None
+    if BRIEF:
+        print(f"{label}: {dur:.1f}s, out={out_tok}, think_chars={think}, "
+              f"{f'{tps:.1f} tok/s' if tps else '-'}, stop={r['stop']}, "
+              f"cache hits+{r['hits']:.0f}/miss+{r['miss']:.0f}")
+        return r
     print(f"\n{label}")
     print(f"  duration        : {dur:.1f} s")
     print(f"  usage           : {json.dumps(u)}")
@@ -294,10 +333,11 @@ def send(label, messages, max_tokens, extra=None):
     return r
 
 
-print("Probes 1/1a/1b/1c ask the smallest possible question four ways, to see how")
-print("much the model thinks unasked and whether the effort cap changes that.")
-print("Probes 2-4 test whether the prefix cache survives a conversation that")
-print("grows, which is the shape Claude Code actually sends.")
+if not BRIEF:
+    print("Probes 1/1a/1b/1c ask the smallest possible question four ways, to see how")
+    print("much the model thinks unasked and whether the effort cap changes that.")
+    print("Probes 2-4 test whether the prefix cache survives a conversation that")
+    print("grows, which is the shape Claude Code actually sends.")
 
 TRIVIAL = [{"role": "user", "content": "Reply with exactly: OK"}]
 p1 = send("probe 1: trivial prompt, no effort field (what the model does unasked)",

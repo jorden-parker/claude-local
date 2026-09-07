@@ -23,6 +23,14 @@ MODEL="${CLAUDE_LOCAL_MODEL:-${MODEL:-qwen3.8-27b-4bit}}"
 PORT="${CLAUDE_LOCAL_PORT:-${PORT:-8000}}"
 EFFORT="${CLAUDE_LOCAL_EFFORT:-${EFFORT:-low}}"
 DASHBOARD_PORT="${CLAUDE_LOCAL_DASHBOARD_PORT:-8001}"
+# Claude Code refreshes its stored claude.ai login on startup even when
+# ANTHROPIC_API_KEY is set. With ANTHROPIC_BASE_URL pointed at rapid-mlx that
+# refresh 404s and prints "User OAuth refresh failed (HTTP 404)". Giving
+# claude-local its own CLAUDE_CONFIG_DIR removes the stored login, so there is
+# nothing to refresh. Off by default: an isolated config dir does not see your
+# ~/.claude global CLAUDE.md, settings, skills or history.
+ISOLATE_CONFIG="${CLAUDE_LOCAL_ISOLATE_CONFIG:-${ISOLATE_CONFIG:-0}}"
+CONFIG_DIR="${CLAUDE_LOCAL_CONFIG_DIR:-${HOME}/.config/claude-local/claude-home}"
 BASE_URL="http://127.0.0.1:${PORT}"
 LOG_DIR="${HOME}/.cache/claude-local"
 LOG_FILE="${LOG_DIR}/server.log"
@@ -177,7 +185,14 @@ start_server || exit 1
 
 # --- launch Claude Code --------------------------------------------------
 # Env vars are scoped to this process only; the normal `claude` is untouched.
+CONFIG_ENV=()
+if [ "$ISOLATE_CONFIG" = "1" ]; then
+  mkdir -p "$CONFIG_DIR"
+  CONFIG_ENV=(CLAUDE_CONFIG_DIR="$CONFIG_DIR")
+fi
+
 exec env \
+  ${CONFIG_ENV[@]+"${CONFIG_ENV[@]}"} \
   ANTHROPIC_BASE_URL="$BASE_URL" \
   ANTHROPIC_API_KEY=local \
   ANTHROPIC_MODEL="$MODEL" \
