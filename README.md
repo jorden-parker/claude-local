@@ -35,15 +35,14 @@ cd ~/src/claude-local
 ./install.sh
 ```
 
-`install.sh` does everything and is safe to re-run:
+`install.sh` does everything, is safe to re-run, and verifies itself at the end:
 
 - `brew install rapid-mlx` if missing
-- symlinks `claude-local` into `~/.local/bin`
-- adds `~/.local/bin` to PATH in `~/.zshrc` (or `~/.bashrc`) if needed
-- warns if an old `/usr/local/bin/claude-local` would shadow it
+- links `claude-local` into `/opt/homebrew/bin` (already on PATH), or `~/.local/bin` as fallback
+- removes stale `claude-local` links elsewhere, including a root-owned one in `/usr/local/bin` (asks for sudo)
+- adds the bin dir to your shell rc file only if needed
 - downloads the model (~20 GB) only if it is not already in the Rapid-MLX cache. Pass `--no-pull` to skip the check.
-
-Then open a new terminal and run `claude-local status`.
+- opens a fresh login shell and confirms `claude-local` resolves, then runs `claude-local status`
 
 Claude Code itself: `npm install -g @anthropic-ai/claude-code`.
 

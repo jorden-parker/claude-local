@@ -5,7 +5,6 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN_DIR="${HOME}/.local/bin"
 MODEL="${CLAUDE_LOCAL_MODEL:-qwen3.8-27b-4bit}"
 PULL=1
 [ "${1:-}" = "--no-pull" ] && PULL=0
@@ -34,16 +33,37 @@ else
   echo "Claude Code not found. Install: npm install -g @anthropic-ai/claude-code" >&2
 fi
 
-step "symlink ${BIN_DIR}/claude-local"
-mkdir -p "$BIN_DIR"
+step "launcher"
+chmod +x "${REPO_DIR}/claude-local" "${REPO_DIR}/install.sh"
+
+# Prefer a brew-owned dir that is already on PATH; fall back to ~/.local/bin.
+BIN_DIR=""
+for d in /opt/homebrew/bin "${HOME}/.local/bin"; do
+  mkdir -p "$d" 2>/dev/null || true
+  if [ -w "$d" ]; then BIN_DIR="$d"; break; fi
+done
+[ -n "$BIN_DIR" ] || { echo "no writable bin dir found" >&2; exit 1; }
 ln -sf "${REPO_DIR}/claude-local" "${BIN_DIR}/claude-local"
-ls -l "${BIN_DIR}/claude-local"
+echo "linked ${BIN_DIR}/claude-local -> ${REPO_DIR}/claude-local"
+
+# Remove stale links elsewhere so nothing shadows this one.
+for d in /usr/local/bin "${HOME}/.local/bin" /opt/homebrew/bin; do
+  f="${d}/claude-local"
+  [ "$d" = "$BIN_DIR" ] && continue
+  [ -e "$f" ] || [ -L "$f" ] || continue
+  if [ -w "$d" ]; then
+    rm -f "$f" && echo "removed stale ${f}"
+  else
+    echo "stale ${f} is root-owned; removing with sudo (you may be asked for your password)"
+    sudo rm -f "$f" && echo "removed stale ${f}"
+  fi
+done
 
 step "PATH"
 # shellcheck disable=SC2016  # literal $HOME wanted in the rc file
-PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+PATH_LINE="export PATH=\"${BIN_DIR}:\$PATH\""
 case ":${PATH}:" in
-  *":${BIN_DIR}:"*) echo "already on PATH" ;;
+  *":${BIN_DIR}:"*) echo "${BIN_DIR} already on PATH" ;;
   *)
     RC="${HOME}/.zshrc"
     case "$(basename "${SHELL:-zsh}")" in
@@ -58,12 +78,6 @@ case ":${PATH}:" in
     ;;
 esac
 
-if [ -e /usr/local/bin/claude-local ]; then
-  step "WARNING"
-  echo "/usr/local/bin/claude-local exists and will shadow this one on PATH."
-  echo "Remove it after checking what it is:  sudo rm /usr/local/bin/claude-local"
-fi
-
 if [ "$PULL" = 1 ] && command -v rapid-mlx >/dev/null; then
   step "model ${MODEL}"
   if rapid-mlx models --cached --json 2>/dev/null | grep -q "\"${MODEL}\"" \
@@ -75,5 +89,17 @@ if [ "$PULL" = 1 ] && command -v rapid-mlx >/dev/null; then
   fi
 fi
 
+step "verify"
+found="$("${SHELL:-/bin/zsh}" -lic 'command -v claude-local' 2>/dev/null || true)"
+if [ -n "$found" ] && [ -x "$found" ]; then
+  echo "ok: a new terminal will find ${found}"
+  "$found" status || true
+else
+  echo "a fresh shell still cannot find claude-local." >&2
+  echo "run this in your current terminal and try again:" >&2
+  echo "  export PATH=\"${BIN_DIR}:\$PATH\"" >&2
+  exit 1
+fi
+
 step "done"
-echo "Open a new terminal, then run:  claude-local status"
+echo "Run:  claude-local"
