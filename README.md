@@ -7,7 +7,7 @@ Target machine: MacBook Pro M4 Pro, 48 GB unified memory.
 
 ## What it does
 
-`claude-local` is a fish function that:
+`claude-local` is a bash script (works from zsh, bash, or fish) that:
 
 1. Starts [Rapid-MLX](https://github.com/raullenchai/Rapid-MLX) serving
    `qwen3.8-27b-4bit` if it is not already running, and waits for it to be healthy.
@@ -29,10 +29,10 @@ Target machine: MacBook Pro M4 Pro, 48 GB unified memory.
 
 ## Install (work Mac)
 
-```fish
+```sh
 brew install rapid-mlx
 git clone https://github.com/jorden-parker/claude-local.git ~/src/claude-local
-ln -sf ~/src/claude-local/claude-local.fish ~/.config/fish/functions/claude-local.fish
+ln -sf ~/src/claude-local/claude-local /usr/local/bin/claude-local   # any dir on PATH
 rapid-mlx pull qwen3.8-27b-4bit   # ~20 GB, do this once
 ```
 
@@ -40,7 +40,7 @@ Claude Code itself: `npm install -g @anthropic-ai/claude-code`.
 
 ## Use
 
-```fish
+```sh
 claude-local            # start server if needed, open Claude Code
 claude-local -p "hi"    # any claude args pass through
 claude-local status     # server health and loaded model
@@ -55,7 +55,7 @@ claude-local stop       # stop the server
    and a real answer, not a wall of thinking.
 3. Check MTP is active and read the speed:
 
-   ```fish
+   ```sh
    curl -s http://127.0.0.1:8000/metrics | grep -iE 'spec|accept|tokens_per'
    ```
 
@@ -76,23 +76,23 @@ The CLI flags `--disallowedTools Agent Workflow` are also passed as a belt-and-b
 
 ## Tuning
 
-Edit the profile block at the top of `claude-local.fish`:
+Override via env vars, or edit the profile block at the top of `claude-local`:
 
-- `model`: any Rapid-MLX alias (`rapid-mlx models`). `qwen3.8-27b-8bit` is higher quality, about half the speed.
-- `effort`: `low`, `medium`, `high`, `xhigh`.
-- `serve_flags`: see `rapid-mlx serve --help`. `--no-spec-decode` turns MTP off for A/B testing.
+- `CLAUDE_LOCAL_MODEL`: any Rapid-MLX alias (`rapid-mlx models`). `qwen3.8-27b-8bit` is higher quality, about half the speed.
+- `CLAUDE_LOCAL_EFFORT`: `low`, `medium`, `high`, `xhigh`.
+- `SERVE_FLAGS` (in the script): see `rapid-mlx serve --help`. `--no-spec-decode` turns MTP off for A/B testing.
 
 Context: Rapid-MLX serves the model's native 256k window. Claude Code is capped
 at 200k via `CLAUDE_CODE_DISABLE_1M_CONTEXT=1`. KV cache costs about 4 GB per 64k tokens.
 
 ## Development
 
-```fish
+```sh
 brew install pre-commit
 pre-commit install
 ```
 
-Hooks: whitespace, JSON and YAML checks, `fish --no-execute`, `fish_indent --check`.
+Hooks: whitespace, JSON and YAML checks, `shellcheck`, `bash -n`.
 
 ## Sources
 

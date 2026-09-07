@@ -6,15 +6,16 @@ repos:
       - id: end-of-file-fixer
       - id: check-json
       - id: check-yaml
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        files: ^claude-local$
+        types: [file]
   - repo: local
     hooks:
-      - id: fish-syntax
-        name: fish syntax check
-        entry: fish --no-execute
+      - id: bash-syntax
+        name: bash syntax check
+        entry: bash -n
         language: system
-        files: \.fish$
-      - id: fish-indent
-        name: fish_indent --check
-        entry: fish_indent --check
-        language: system
-        files: \.fish$
+        files: ^claude-local$

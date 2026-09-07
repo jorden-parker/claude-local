@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# claude-local: run Claude Code against a local Qwen3.8-27B served by Rapid-MLX.
+#
+# Install:  ln -sf "$PWD/claude-local" /usr/local/bin/claude-local   (or any dir on PATH)
+# Usage:    claude-local [claude args...]   start server if needed, launch Claude Code
+#           claude-local stop               stop the server, free ~20 GB RAM
+#           claude-local status             health + loaded model
+#           claude-local logs               tail the server log
+set -euo pipefail
+
+# --- profile -------------------------------------------------------------
+MODEL="${CLAUDE_LOCAL_MODEL:-qwen3.8-27b-4bit}"
+PORT="${CLAUDE_LOCAL_PORT:-8000}"
+EFFORT="${CLAUDE_LOCAL_EFFORT:-low}"
+BASE_URL="http://127.0.0.1:${PORT}"
+LOG_DIR="${HOME}/.cache/claude-local"
+LOG_FILE="${LOG_DIR}/server.log"
+PID_FILE="${LOG_DIR}/server.pid"
+
+# Resolve the repo dir through a symlink so settings.local-model.json is found.
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do SELF="$(readlink "$SELF")"; done
+REPO_DIR="$(cd "$(dirname "$SELF")" && pwd)"
+SETTINGS_FILE="${REPO_DIR}/settings.local-model.json"
+
+# Rapid-MLX serve flags. MTP speculative decoding and the qwen3 parsers are
+# auto-selected for this exact alias; no flag needed.
+SERVE_FLAGS=(
+  --port "$PORT"
+  --pin-system-prompt
+  --relocate-mid-conversation-system
+  --hybrid-cache-entries 4
+)
+
+mkdir -p "$LOG_DIR"
+
+healthy() { curl -sf "${BASE_URL}/health" >/dev/null 2>&1; }
+
+case "${1:-}" in
+  stop)
+    if [ -f "$PID_FILE" ]; then
+      pid="$(cat "$PID_FILE")"
+      if kill "$pid" 2>/dev/null; then
+        echo "stopped rapid-mlx (pid $pid)"
+      else
+        echo "no running server for pid $pid"
+      fi
+      rm -f "$PID_FILE"
+    elif pkill -f "rapid-mlx serve ${MODEL}"; then
+      echo "stopped rapid-mlx"
+    else
+      echo "server not running"
+    fi
+    exit 0
+    ;;
+  status)
+    if healthy; then
+      echo "server: up on ${BASE_URL}"
+      curl -sf "${BASE_URL}/v1/models" | grep -o '"id": *"[^"]*"' | sed 's/"id": *"\(.*\)"/model: \1/'
+      exit 0
+    fi
+    echo "server: down"
+    exit 1
+    ;;
+  logs)
+    exec tail -f "$LOG_FILE"
+    ;;
+  help|--help|-h)
+    echo "claude-local [claude args...] | stop | status | logs"
+    exit 0
+    ;;
+esac
+
+# --- preflight -----------------------------------------------------------
+command -v rapid-mlx >/dev/null || { echo "rapid-mlx not found. Install: brew install rapid-mlx" >&2; exit 1; }
+command -v claude >/dev/null || { echo "claude not found. Install: npm install -g @anthropic-ai/claude-code" >&2; exit 1; }
+[ -f "$SETTINGS_FILE" ] || { echo "missing $SETTINGS_FILE" >&2; exit 1; }
+
+# --- start server if down ------------------------------------------------
+if ! healthy; then
+  echo "starting rapid-mlx serve ${MODEL} (log: ${LOG_FILE})"
+  nohup rapid-mlx serve "$MODEL" "${SERVE_FLAGS[@]}" >"$LOG_FILE" 2>&1 &
+  echo $! >"$PID_FILE"
+  disown
+
+  # First run downloads ~20 GB; run `rapid-mlx pull qwen3.8-27b-4bit` first.
+  waited=0
+  limit=600
+  until healthy; do
+    if ! kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+      echo "server exited. last lines of ${LOG_FILE}:" >&2
+      tail -n 20 "$LOG_FILE" >&2
+      exit 1
+    fi
+    if [ "$waited" -ge "$limit" ]; then
+      echo "server not healthy after ${limit} s. See ${LOG_FILE}" >&2
+      exit 1
+    fi
+    sleep 2
+    waited=$((waited + 2))
+  done
+  echo "server ready after ${waited} s"
+fi
+
+# --- launch Claude Code --------------------------------------------------
+# Env vars are scoped to this process only; the normal `claude` is untouched.
+exec env \
+  ANTHROPIC_BASE_URL="$BASE_URL" \
+  ANTHROPIC_API_KEY=local \
+  ANTHROPIC_MODEL="$MODEL" \
+  ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL" \
+  ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL" \
+  ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL" \
+  ANTHROPIC_DEFAULT_FABLE_MODEL="$MODEL" \
+  CLAUDE_CODE_SUBAGENT_MODEL="$MODEL" \
+  CLAUDE_CODE_DISABLE_1M_CONTEXT=1 \
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+  claude \
+  --settings "$SETTINGS_FILE" \
+  --model "$MODEL" \
+  --effort "$EFFORT" \
+  --disallowedTools Agent Workflow \
+  "$@"
