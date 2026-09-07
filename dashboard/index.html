@@ -83,6 +83,21 @@
   </div>
 
   <div class="card">
+    <h2>Diagnostics <span class="muted">(raw counters from /metrics; why a request may not show above)</span></h2>
+    <div class="grid">
+      <div class="tile"><b id="d_processed">-</b><span>requests processed (server lifetime)</span></div>
+      <div class="tile"><b id="d_inflight">-</b><span>current request running for</span></div>
+      <div class="tile"><b id="d_cancelled">-</b><span>cancelled / via disconnect</span></div>
+      <div class="tile"><b id="d_scrape">-</b><span>metrics scrapes ok / failed</span></div>
+      <div class="tile"><b id="d_scrape_ms">-</b><span>last scrape ms (2000 = timeout)</span></div>
+      <div class="tile"><b id="d_accept">-</b><span>MTP accept ratio</span></div>
+    </div>
+    <div id="d_err" class="mono muted" style="margin-top:8px"></div>
+    <h2 style="margin-top:12px">Notable log lines <span class="muted">(error, warn, cancel, abort, disconnect, timeout, memory)</span></h2>
+    <pre id="notable" class="muted">none</pre>
+  </div>
+
+  <div class="card">
     <h2>Control</h2>
     <div class="row">
       <button id="b_start">Start</button>
@@ -149,9 +164,24 @@ function render(s) {
       const miss = r.prompt > 0 && r.cached != null && r.cached / r.prompt < thresholds.cache_ratio;
       const slow = r.tps != null && r.tps < thresholds.mtp_tps;
       const pre = r.prompt != null && r.cached != null ? r.prompt - r.cached : null;
+      if (r.cancelled) return `<tr class="miss"><td>${ago(r.t)}</td><td colspan="6" style="text-align:left">${r.n} request${r.n > 1 ? 's' : ''} cancelled (client disconnected or timed out); not counted as processed</td></tr>`;
       return `<tr class="${miss ? 'miss' : ''} ${slow ? 'slow' : ''}"><td>${ago(r.t)}${r.n > 1 ? ` (${r.n} overlapped)` : ''}</td><td>${fmt(r.prompt)}</td><td>${fmt(r.cached)}</td><td>${fmt(pre)}</td><td>${fmt(r.completion)}</td><td>${fmt(r.tps, 1)}</td><td>${fmt(r.duration, 1)}</td></tr>`;
     }).join('');
   }
+
+  const c = s.counters || {}, sc = s.scrape || {};
+  $('d_processed').textContent = fmt(c.processed);
+  $('d_inflight').textContent = s.inflight_s != null ? (s.inflight_s < 60 ? `${s.inflight_s | 0}s` : `${(s.inflight_s / 60).toFixed(1)} min`) : 'idle';
+  $('d_inflight').style.color = s.inflight_s > 120 ? 'var(--warn)' : '';
+  $('d_cancelled').textContent = `${fmt(c.cancelled)} / ${fmt(c.disconnects)}`;
+  $('d_cancelled').style.color = c.cancelled > 0 ? 'var(--bad)' : '';
+  $('d_scrape').textContent = `${fmt(sc.ok)} / ${fmt(sc.failed)}`;
+  $('d_scrape').style.color = sc.failed > 0 ? 'var(--warn)' : '';
+  $('d_scrape_ms').textContent = fmt(sc.last_ms);
+  $('d_scrape_ms').style.color = sc.last_ms >= 1500 ? 'var(--warn)' : '';
+  $('d_accept').textContent = c.accept_ratio != null ? `${fmt(c.accept_ratio * 100)}%` : '-';
+  $('d_err').textContent = sc.last_error ? 'last scrape problem: ' + sc.last_error : '';
+  $('notable').textContent = (s.notable && s.notable.length) ? s.notable.join('\n') : 'none';
 
   const busy = !!s.action;
   for (const id of ['b_start', 'b_stop', 'b_restart']) $(id).disabled = busy;

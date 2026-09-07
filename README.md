@@ -72,6 +72,12 @@ that answers "why is this turn slow?" at a glance:
   macOS memory pressure and swap-ins, the MTP line from the startup log.
 - **Control**: start, stop, restart, and edit the profile (model, port, effort).
   Saving writes `~/.config/claude-local/profile` and restarts the server.
+- **Diagnostics**: raw `/metrics` counters (requests processed, cancelled,
+  via disconnect), how long the current request has been running, metrics
+  scrape health (ok/failed, last ms), MTP accept ratio, and the notable log
+  lines (error, warn, cancel, abort, disconnect, timeout, memory). Cancelled
+  requests appear as red rows in the request table; rapid-mlx does not count
+  them as processed, so a Claude Code timeout-and-retry shows up here instead.
 - **Log tail**, last 200 lines.
 
 Thinking tokens are not exposed by Rapid-MLX. A huge completion count on a

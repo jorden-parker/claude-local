@@ -25,6 +25,7 @@ PLAIN_DECODE_TPS = 15.0   # 27B 4-bit without MTP
 MTP_ON_TPS = 25.0         # above this, MTP is clearly helping
 CACHE_MISS_RATIO = 0.5    # cached/prompt below this = miss
 LONG_OUTPUT_TOKENS = 2000 # completion above this on one turn = thinking wall?
+SLOW_REQUEST_S = 120      # in-flight longer than this gets flagged
 POLL_METRICS_S = 1.0
 POLL_MEMORY_S = 5.0
 HISTORY = 20
@@ -38,6 +39,7 @@ PID_FILE = ENV.get("CLAUDE_LOCAL_PID_FILE", os.path.expanduser("~/.cache/claude-
 PROFILE_FILE = ENV.get("CLAUDE_LOCAL_PROFILE_FILE", os.path.expanduser("~/.config/claude-local/profile"))
 PORT = int(ENV.get("CLAUDE_LOCAL_DASHBOARD_PORT", "8001"))
 
+NOTABLE_RE = re.compile(r"(?i)error|warn|cancel|abort|disconnect|traceback|timeout|oom|out of memory|swap")
 LOG_LINE_RE = re.compile(r"Chat completion(?: \(stream\))?: (\d+) tokens in ([\d.]+)s \(([\d.]+) tok/s\)")
 MTP_LINE_RE = re.compile(r"(?i)\b(mtp|spec(ulative)?|draft)\b")
 PROM_RE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?\s+([-+0-9.eE]+|NaN|[+-]Inf)\s*$')
@@ -179,25 +181,42 @@ class State:
         self.action_out = ""
         self.mock_seq = 0
         self.log_seen = 0
+        # raw counters from the last good scrape, shown on the diagnostics card
+        self.counters = {}
+        self.scrape = {"ok": 0, "failed": 0, "last_ms": None, "last_error": "", "last_ok_t": None}
+        self.inflight_since = None   # time the current request was first seen running
 
     # -- polling ---------------------------------------------------------
     def poll_metrics(self):
         if self.mock:
             return self.mock_tick()
+        t0 = time.time()
         try:
             values, labels = parse_prometheus(http_get("/metrics"))
         except (urllib.error.URLError, OSError) as e:
             # Keep the last good baseline. A scrape can time out while the
             # model is busy generating; dropping prev here would make the
             # next good scrape the new baseline and lose the request delta.
+            with self.lock:
+                self.scrape["failed"] += 1
+                self.scrape["last_ms"] = int((time.time() - t0) * 1000)
+                self.scrape["last_error"] = str(e)[:120]
             if self.prev is not None:
                 print("metrics scrape failed, keeping baseline:", e, file=sys.stderr)
             return
+        with self.lock:
+            self.scrape["ok"] += 1
+            self.scrape["last_ms"] = int((time.time() - t0) * 1000)
+            self.scrape["last_ok_t"] = time.time()
         processed = metric(values, "requests_processed_total", "requests_total")
         if processed is None:
             # rapid-mlx returns build_info only when engine.get_stats() fails
             # (e.g. during warmup). Not a baseline; keep the previous one.
+            with self.lock:
+                self.scrape["last_error"] = "metrics body has no request counters (engine not ready?)"
             return
+        running = metric(values, "requests_running")
+        cancelled = metric(values, "requests_cancelled_total")
         snap = {
             "processed": processed,
             "prompt": metric(values, "prompt_tokens_total"),
@@ -205,17 +224,36 @@ class State:
             "saved": metric(values, "prefix_cache_tokens_saved_total", "cache_tokens_saved_total"),
             "hits": metric(values, "prefix_cache_hits_total"),
             "misses": metric(values, "prefix_cache_misses_total"),
+            "cancelled": cancelled,
             "labels": labels.get(next((k for k in labels if k.endswith("build_info")), ""), {}),
             "values": values,
         }
         with self.lock:
             prev = self.prev
             self.prev = snap
+            self.counters = {
+                "processed": processed, "running": running,
+                "waiting": metric(values, "requests_waiting"),
+                "cancelled": cancelled,
+                "disconnects": metric(values, "requests_cancelled_via_disconnect_total"),
+                "accept_ratio": metric(values, "spec_decode_accept_ratio"),
+                "uptime_s": metric(values, "uptime_seconds"),
+            }
+            if running:
+                self.inflight_since = self.inflight_since or time.time()
+            else:
+                self.inflight_since = None
             if prev:
                 n = int(processed - prev["processed"])
                 if n > 0:
                     self.add_request(prev, snap, n)
                 # n < 0: counters reset (server restarted); snap is the new baseline.
+                if cancelled is not None and prev.get("cancelled") is not None:
+                    c = int(cancelled - prev["cancelled"])
+                    if c > 0:
+                        self.requests.append({"t": time.time(), "n": c, "cancelled": True,
+                                              "prompt": None, "cached": None, "completion": None,
+                                              "tps": None, "duration": None})
 
     def add_request(self, prev, snap, n):
         def d(k):
@@ -255,6 +293,13 @@ class State:
 
     def mock_tick(self):
         self.mock_seq += 1
+        with self.lock:
+            self.scrape = {"ok": self.mock_seq, "failed": self.mock_seq // 10, "last_ms": random.choice([3, 5, 2100]),
+                           "last_error": "timed out" if self.mock_seq % 10 == 0 else "", "last_ok_t": time.time()}
+            self.counters = {"processed": self.mock_seq // 8, "running": self.mock_seq % 8 > 5, "waiting": 0,
+                             "cancelled": self.mock_seq // 30, "disconnects": self.mock_seq // 30,
+                             "accept_ratio": 0.71, "uptime_s": 3600 + self.mock_seq}
+            self.inflight_since = (time.time() - 40) if self.mock_seq % 8 > 5 else None
         if self.mock_seq % 8 == 0:
             prompt = random.choice([1200, 22000, 24000, 800])
             miss = random.random() < 0.4
@@ -321,13 +366,18 @@ class State:
             mtp_line = self.mtp_line
             prev = self.prev
             action, action_out = self.action, self.action_out
+            counters, scrape = dict(self.counters), dict(self.scrape)
+            inflight_s = (time.time() - self.inflight_since) if self.inflight_since else None
         cache = None
         if prev and prev.get("hits") is not None and prev.get("misses") is not None:
             tot = prev["hits"] + prev["misses"]
             cache = {"hits": prev["hits"], "misses": prev["misses"], "rate": (prev["hits"] / tot) if tot else None}
         build = (prev or {}).get("labels", {})
-        verdict = self.verdict(up, status, reqs, mem, swap_delta, mtp_line, action)
+        verdict = self.verdict(up, status, reqs, mem, swap_delta, mtp_line, action, inflight_s)
+        notable = [ln.rstrip()[:300] for ln in tail_lines(LOG_FILE, 400) if NOTABLE_RE.search(ln)][-30:] if not self.mock else [
+            "[mock] WARNING request abc123 cancelled via client disconnect"]
         return {
+            "counters": counters, "scrape": scrape, "inflight_s": inflight_s, "notable": notable,
             "up": up, "pid": pid, "models": models, "status": status, "flags": flags,
             "version": self.version or build.get("version", ""), "build": build,
             "requests": list(reversed(reqs)), "memory": mem, "swapins_delta": swap_delta,
@@ -338,7 +388,7 @@ class State:
         }
 
     @staticmethod
-    def verdict(up, status, reqs, mem, swap_delta, mtp_line, action):
+    def verdict(up, status, reqs, mem, swap_delta, mtp_line, action, inflight_s=None):
         if action:
             return {"level": "info", "text": f"{action}..."}
         if not up:
@@ -350,8 +400,12 @@ class State:
             problems.append(f"{swap_delta} swap-ins since last poll")
         if status.get("num_running"):
             ptps = status.get("prompt_tps")
-            text = "Request in progress" + (f", prefill {ptps:.0f} tok/s" if ptps else "")
+            text = "Request in progress" + (f" for {inflight_s / 60:.1f} min" if inflight_s else "") + (f", prefill {ptps:.0f} tok/s" if ptps else "")
+            if inflight_s and inflight_s > SLOW_REQUEST_S:
+                problems.insert(0, "slow: check memory pressure and cache miss")
             return {"level": "warn" if problems else "info", "text": "; ".join([text] + problems)}
+        if reqs and reqs[-1].get("cancelled"):
+            return {"level": "bad", "text": f"Last request cancelled ({reqs[-1]['n']}): client disconnected or timed out and retried. Not counted as processed."}
         if reqs:
             r = reqs[-1]
             p, c = r.get("prompt"), r.get("cached")

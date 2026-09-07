@@ -21,8 +21,10 @@ TIMEOUT = object()
 BARE = 'rapid_mlx_build_info{version="0.13.4",model="qwen"} 1\n'  # engine.get_stats() failed: no counters
 
 
-def body(processed, prompt, completion, saved=0):
+def body(processed, prompt, completion, saved=0, cancelled=0, running=0):
     return "\n".join([
+        f"rapid_mlx_requests_cancelled_total {cancelled}",
+        f"rapid_mlx_requests_running {running}",
         "# HELP rapid_mlx_build_info Build info",
         "# TYPE rapid_mlx_build_info gauge",
         'rapid_mlx_build_info{version="0.13.4",model="qwen"} 1',
@@ -75,6 +77,24 @@ class RequestRows(unittest.TestCase):
         rows = poll([body(7, 9000, 900), body(0, 0, 0), body(1, 500, 80)])
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["prompt"], 500)
+
+
+class Diagnostics(unittest.TestCase):
+    def test_cancelled_request_gets_a_row(self):
+        rows = poll([body(0, 0, 0), body(0, 0, 0, cancelled=1)])
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["cancelled"])
+
+    def test_scrape_health_and_inflight(self):
+        srv.http_get = lambda path, timeout=2.0: body(0, 0, 0, running=1)
+        st = srv.State()
+        st.poll_metrics()
+        self.assertEqual(st.scrape["ok"], 1)
+        self.assertIsNotNone(st.inflight_since)
+        self.assertEqual(st.counters["running"], 1)
+        srv.http_get = lambda path, timeout=2.0: body(0, 0, 0, running=0)
+        st.poll_metrics()
+        self.assertIsNone(st.inflight_since)
 
 
 if __name__ == "__main__":
