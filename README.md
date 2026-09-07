@@ -32,9 +32,19 @@ Target machine: MacBook Pro M4 Pro, 48 GB unified memory.
 ```sh
 brew install rapid-mlx
 git clone https://github.com/jorden-parker/claude-local.git ~/src/claude-local
-ln -sf ~/src/claude-local/claude-local /usr/local/bin/claude-local   # any dir on PATH
+mkdir -p ~/.local/bin
+ln -sf ~/src/claude-local/claude-local ~/.local/bin/claude-local
 rapid-mlx pull qwen3.8-27b-4bit   # ~20 GB, do this once
 ```
+
+If `~/.local/bin` is not on your PATH, add it (zsh: `~/.zshrc`):
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+`/opt/homebrew/bin` also works as the symlink target and is already on PATH.
+Avoid `/usr/local/bin`: it is root-owned and gives "permission denied".
 
 Claude Code itself: `npm install -g @anthropic-ai/claude-code`.
 

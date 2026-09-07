@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # claude-local: run Claude Code against a local Qwen3.8-27B served by Rapid-MLX.
 #
-# Install:  ln -sf "$PWD/claude-local" /usr/local/bin/claude-local   (or any dir on PATH)
+# Install:  ln -sf "$PWD/claude-local" ~/.local/bin/claude-local   (or /opt/homebrew/bin)
 # Usage:    claude-local [claude args...]   start server if needed, launch Claude Code
 #           claude-local stop               stop the server, free ~20 GB RAM
 #           claude-local status             health + loaded model
