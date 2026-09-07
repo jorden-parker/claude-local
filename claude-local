@@ -3,11 +3,12 @@
 #
 # Install:  ./install.sh   (links into /opt/homebrew/bin, or ~/.local/bin as fallback)
 # Usage:    claude-local [claude args...]   start server if needed, launch Claude Code
-#           claude-local stop               stop the server, free ~20 GB RAM
+#           claude-local stop               stop the server, free ~15 GB RAM
 #           claude-local status             health + loaded model
 #           claude-local logs               tail the server log
 #           claude-local start              start the server only
 #           claude-local dashboard          web dashboard on http://127.0.0.1:8001
+#           claude-local diagnose           why was that turn slow: one report
 set -euo pipefail
 
 # --- profile -------------------------------------------------------------
@@ -33,34 +34,40 @@ while [ -L "$SELF" ]; do SELF="$(readlink "$SELF")"; done
 REPO_DIR="$(cd "$(dirname "$SELF")" && pwd)"
 SETTINGS_FILE="${REPO_DIR}/settings.local-model.json"
 
-# Rapid-MLX serve flags. MTP speculative decoding and the qwen3 parsers are
-# auto-selected for this exact alias; no flag needed.
+# Rapid-MLX serve flags. The qwen3_coder_xml tool parser and the qwen3 reasoning
+# parser are auto-selected for this alias, but MTP is NOT:
+# `rapid-mlx info qwen3.8-27b-4bit` reports "Spec decode: disabled (hybrid arch)"
+# and "MTP path: sidecar (opt-in: --speculative-config)". Without the flag below
+# the model decodes plain, which is the slow half of a slow turn.
+SPEC_DECODE="${CLAUDE_LOCAL_SPEC_DECODE:-${SPEC_DECODE:-1}}"
+SPEC_CONFIG='{"method":"mtp","num_speculative_tokens":3}'
 SERVE_FLAGS=(
   --port "$PORT"
   --pin-system-prompt
   --relocate-mid-conversation-system
   --hybrid-cache-entries 4
 )
+if [ "$SPEC_DECODE" != "0" ]; then
+  SERVE_FLAGS+=(--speculative-config "$SPEC_CONFIG")
+fi
 
 mkdir -p "$LOG_DIR"
 
 healthy() { curl -sf "${BASE_URL}/health" >/dev/null 2>&1; }
 
 # --- start server if down ------------------------------------------------
-start_server() {
-  healthy && return 0
-  echo "starting rapid-mlx serve ${MODEL} (log: ${LOG_FILE})"
-  nohup rapid-mlx serve "$MODEL" "${SERVE_FLAGS[@]}" >"$LOG_FILE" 2>&1 &
+# Launch one attempt and wait for /health. Returns 2 when the process died,
+# so the caller can decide whether a retry with fewer flags is worth trying.
+serve_attempt() {
+  nohup rapid-mlx serve "$MODEL" "$@" >"$LOG_FILE" 2>&1 &
   echo $! >"$PID_FILE"
   disown
 
-  # First run downloads ~20 GB; run `rapid-mlx pull qwen3.8-27b-4bit` first.
+  # First run downloads ~15 GB; run `rapid-mlx pull qwen3.8-27b-4bit` first.
   local waited=0 limit=600
   until healthy; do
     if ! kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-      echo "server exited. last lines of ${LOG_FILE}:" >&2
-      tail -n 20 "$LOG_FILE" >&2
-      return 1
+      return 2
     fi
     if [ "$waited" -ge "$limit" ]; then
       echo "server not healthy after ${limit} s. See ${LOG_FILE}" >&2
@@ -70,6 +77,39 @@ start_server() {
     waited=$((waited + 2))
   done
   echo "server ready after ${waited} s"
+}
+
+start_server() {
+  healthy && return 0
+  echo "starting rapid-mlx serve ${MODEL} (log: ${LOG_FILE})"
+  serve_attempt "${SERVE_FLAGS[@]}" && return 0
+  local rc=$?
+
+  # A runtime that does not accept this MTP sidecar config exits immediately.
+  # Losing MTP is better than losing the server, so retry once without it and
+  # say so, rather than leaving the user with a dead port.
+  if [ "$rc" = "2" ] && [ "$SPEC_DECODE" != "0" ]; then
+    echo "server exited with --speculative-config. Retrying without MTP." >&2
+    tail -n 10 "$LOG_FILE" >&2
+    local plain=()
+    local skip=0
+    for f in "${SERVE_FLAGS[@]}"; do
+      if [ "$skip" = "1" ]; then skip=0; continue; fi
+      if [ "$f" = "--speculative-config" ]; then skip=1; continue; fi
+      plain+=("$f")
+    done
+    serve_attempt "${plain[@]}" && {
+      echo "running WITHOUT MTP: decode will be about half speed." >&2
+      return 0
+    }
+    rc=$?
+  fi
+
+  if [ "$rc" = "2" ]; then
+    echo "server exited. last lines of ${LOG_FILE}:" >&2
+    tail -n 20 "$LOG_FILE" >&2
+  fi
+  return 1
 }
 
 case "${1:-}" in
@@ -106,6 +146,10 @@ case "${1:-}" in
     start_server
     exit $?
     ;;
+  diagnose)
+    shift
+    exec "${REPO_DIR}/scripts/diagnose.sh" "$@"
+    ;;
   dashboard)
     command -v python3 >/dev/null || { echo "python3 not found" >&2; exit 1; }
     shift
@@ -119,7 +163,7 @@ case "${1:-}" in
       python3 "${REPO_DIR}/dashboard/server.py" "$@"
     ;;
   help|--help|-h)
-    echo "claude-local [claude args...] | stop | status | logs | start | dashboard"
+    echo "claude-local [claude args...] | stop | status | logs | start | dashboard | diagnose"
     exit 0
     ;;
 esac
