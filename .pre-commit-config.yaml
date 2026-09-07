@@ -1,0 +1,20 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-json
+      - id: check-yaml
+  - repo: local
+    hooks:
+      - id: fish-syntax
+        name: fish syntax check
+        entry: fish --no-execute
+        language: system
+        files: \.fish$
+      - id: fish-indent
+        name: fish_indent --check
+        entry: fish_indent --check
+        language: system
+        files: \.fish$

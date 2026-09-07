@@ -1,0 +1,103 @@
+# claude-local
+
+Run [Claude Code](https://docs.anthropic.com/en/docs/claude-code) against a local
+**Qwen3.8-27B** on an Apple Silicon Mac, tuned for speed.
+
+Target machine: MacBook Pro M4 Pro, 48 GB unified memory.
+
+## What it does
+
+`claude-local` is a fish function that:
+
+1. Starts [Rapid-MLX](https://github.com/raullenchai/Rapid-MLX) serving
+   `qwen3.8-27b-4bit` if it is not already running, and waits for it to be healthy.
+2. Launches `claude` with environment variables pointing at the local server.
+   Your normal `claude` command is untouched.
+3. Leaves the server running after Claude Code exits so the next session starts warm.
+   `claude-local stop` frees the memory.
+
+## Why these choices
+
+| Choice | Reason |
+| --- | --- |
+| Qwen3.8-27B | Only open-weight Qwen3.8 model. Dense, 256k context, tool calling, vision. |
+| 4-bit quant | ~20 GB. Decode on Apple Silicon is bandwidth-bound, so smaller weights are faster. |
+| Rapid-MLX | MLX runtime with native MTP (multi-token prediction) speculative decoding. Measured 1.4x to 2.3x decode over plain MLX on Qwen3.8-27B. llama.cpp's MTP path shows no gain on Metal. Serves the Anthropic Messages API directly. |
+| Effort `low` | Qwen3.8 defaults to `xhigh` reasoning and can spend 20k+ tokens thinking. `--effort low` maps to a small reasoning cap on the server. |
+| All model roles mapped to one model | Only one model is loaded. Opus, Sonnet, Haiku, and subagent aliases all resolve to Qwen3.8-27B. |
+| Subagents off | A single local model cannot serve parallel agents at useful speed. See below. |
+
+## Install (work Mac)
+
+```fish
+brew install rapid-mlx
+git clone https://github.com/jorden-parker/claude-local.git ~/src/claude-local
+ln -sf ~/src/claude-local/claude-local.fish ~/.config/fish/functions/claude-local.fish
+rapid-mlx pull qwen3.8-27b-4bit   # ~20 GB, do this once
+```
+
+Claude Code itself: `npm install -g @anthropic-ai/claude-code`.
+
+## Use
+
+```fish
+claude-local            # start server if needed, open Claude Code
+claude-local -p "hi"    # any claude args pass through
+claude-local status     # server health and loaded model
+claude-local logs       # tail the server log
+claude-local stop       # stop the server
+```
+
+## Verify it works
+
+1. Run `claude-local status`. Expect `server: up` and `model: qwen3.8-27b-4bit`.
+2. Run `claude-local` and ask: "List the files in this directory." Expect a tool call
+   and a real answer, not a wall of thinking.
+3. Check MTP is active and read the speed:
+
+   ```fish
+   curl -s http://127.0.0.1:8000/metrics | grep -iE 'spec|accept|tokens_per'
+   ```
+
+   Expect non-zero speculative-decode counters. Rapid-MLX reports roughly
+   15 tok/s plain and 26 tok/s with MTP on an M4 Pro.
+
+## How subagents are blocked
+
+`--disallowedTools Agent` alone is not enough. Workflows, `/subtask`,
+`/code-review`, and background tasks each have their own path. The launcher
+passes `settings.local-model.json`, which covers all of them:
+
+- `permissions.deny`: `Agent`, `Workflow`, `/code-review`, `/subtask`
+- `disableWorkflows` and `disableAgentView`
+- `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
+
+The CLI flags `--disallowedTools Agent Workflow` are also passed as a belt-and-braces measure.
+
+## Tuning
+
+Edit the profile block at the top of `claude-local.fish`:
+
+- `model`: any Rapid-MLX alias (`rapid-mlx models`). `qwen3.8-27b-8bit` is higher quality, about half the speed.
+- `effort`: `low`, `medium`, `high`, `xhigh`.
+- `serve_flags`: see `rapid-mlx serve --help`. `--no-spec-decode` turns MTP off for A/B testing.
+
+Context: Rapid-MLX serves the model's native 256k window. Claude Code is capped
+at 200k via `CLAUDE_CODE_DISABLE_1M_CONTEXT=1`. KV cache costs about 4 GB per 64k tokens.
+
+## Development
+
+```fish
+brew install pre-commit
+pre-commit install
+```
+
+Hooks: whitespace, JSON and YAML checks, `fish --no-execute`, `fish_indent --check`.
+
+## Sources
+
+- Rapid-MLX release notes v0.13.4 (Qwen3.8-27B MTP path, +25.9% aggregate, 1.43x to 2.34x single-request decode)
+- Rapid-MLX docs: `docs/agents/claude-code.md`, `docs/reference/cli.md`
+- [qwen38-mtp Apple Silicon sweep](https://github.com/sudoingX/qwen38-mtp/blob/master/sweeps/apple-silicon.md) (llama.cpp MTP parity on Metal)
+- [Simon Willison on Qwen3.8-27B overthinking](https://simonwillison.net/2026/Aug/16/qwen-38-27b/)
+- Claude Code docs: settings reference, sub-agents, model config

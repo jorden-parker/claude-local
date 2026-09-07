@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "deny": ["Agent", "Workflow", "/code-review", "/subtask"]
+  },
+  "disableWorkflows": true,
+  "disableAgentView": true,
+  "env": {
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"
+  }
+}
