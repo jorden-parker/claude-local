@@ -65,8 +65,14 @@ if [ -e /usr/local/bin/claude-local ]; then
 fi
 
 if [ "$PULL" = 1 ] && command -v rapid-mlx >/dev/null; then
-  step "model ${MODEL} (~20 GB, first time only)"
-  rapid-mlx pull "$MODEL"
+  step "model ${MODEL}"
+  if rapid-mlx models --cached --json 2>/dev/null | grep -q "\"${MODEL}\"" \
+     || rapid-mlx ls 2>/dev/null | grep -q "${MODEL}"; then
+    echo "already downloaded"
+  else
+    echo "downloading (~20 GB, first time only)"
+    rapid-mlx pull "$MODEL"
+  fi
 fi
 
 step "done"

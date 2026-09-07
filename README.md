@@ -41,7 +41,7 @@ cd ~/src/claude-local
 - symlinks `claude-local` into `~/.local/bin`
 - adds `~/.local/bin` to PATH in `~/.zshrc` (or `~/.bashrc`) if needed
 - warns if an old `/usr/local/bin/claude-local` would shadow it
-- downloads the model (~20 GB). Pass `--no-pull` to skip.
+- downloads the model (~20 GB) only if it is not already in the Rapid-MLX cache. Pass `--no-pull` to skip the check.
 
 Then open a new terminal and run `claude-local status`.
 
