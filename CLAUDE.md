@@ -56,7 +56,9 @@ shellcheck claude-local install.sh
 bash -n claude-local install.sh                  # syntax check both scripts
 ```
 
-No tests. Verification is manual on the work Mac: `claude-local status`, then
+`python3 -m unittest dashboard/test_server.py` covers the dashboard's
+request-row bookkeeping (scripted `/metrics` bodies, no server needed).
+Everything else is verified manually on the work Mac: `claude-local status`, then
 `claude-local` and check a tool call happens without a wall of thinking. See
 "Verify it works" in `README.md`.
 

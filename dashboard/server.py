@@ -186,11 +186,18 @@ class State:
             return self.mock_tick()
         try:
             values, labels = parse_prometheus(http_get("/metrics"))
-        except (urllib.error.URLError, OSError):
-            with self.lock:
-                self.prev = None
+        except (urllib.error.URLError, OSError) as e:
+            # Keep the last good baseline. A scrape can time out while the
+            # model is busy generating; dropping prev here would make the
+            # next good scrape the new baseline and lose the request delta.
+            if self.prev is not None:
+                print("metrics scrape failed, keeping baseline:", e, file=sys.stderr)
             return
         processed = metric(values, "requests_processed_total", "requests_total")
+        if processed is None:
+            # rapid-mlx returns build_info only when engine.get_stats() fails
+            # (e.g. during warmup). Not a baseline; keep the previous one.
+            return
         snap = {
             "processed": processed,
             "prompt": metric(values, "prompt_tokens_total"),
@@ -204,10 +211,11 @@ class State:
         with self.lock:
             prev = self.prev
             self.prev = snap
-            if prev and processed is not None and prev["processed"] is not None:
+            if prev:
                 n = int(processed - prev["processed"])
                 if n > 0:
                     self.add_request(prev, snap, n)
+                # n < 0: counters reset (server restarted); snap is the new baseline.
 
     def add_request(self, prev, snap, n):
         def d(k):
