@@ -28,6 +28,9 @@ the 16 GB Mac, so the server cannot run here; changes are verified on the work M
   whether MTP is on, probes the effort cap and the prefix cache. Bash plus
   stdlib python3. `--brief` prints a ~60-line digest that fits in a chat
   message; `--no-probe` makes it read-only.
+- `scripts/seed_config.py`: copies onboarding flags and existing folder-trust
+  decisions from `~/.claude.json` into the isolated config dir. Grants no new
+  trust. Idempotent; safe to run every launch.
 - `docs/why-turns-are-slow.md`: the findings behind that script. Read it before
   changing `SERVE_FLAGS` or the effort default.
 - `settings.local-model.json`: passed via `claude --settings`. Denies `Agent`,
@@ -52,6 +55,14 @@ the 16 GB Mac, so the server cannot run here; changes are verified on the work M
 - `--effort` reaches the server as `output_config.effort`, which Rapid-MLX maps
   to a reasoning cap (low 512 ... max uncapped). Whether that cap saves
   wall-clock or is applied post-hoc is unverified on the work Mac.
+- Claude Code refreshes its stored claude.ai login at startup even with
+  `ANTHROPIC_API_KEY` set, and with `ANTHROPIC_BASE_URL` pointed at rapid-mlx
+  that refresh 404s against the local server. So the launcher defaults to its
+  own `CLAUDE_CONFIG_DIR` (`~/.config/claude-local/claude-home`), which stores
+  no login. `setup_config_dir` symlinks `CLAUDE.md`, `settings.json`, `skills`,
+  `output-styles`, `plugins`, `hooks` and `agents` back in, so only session
+  history is actually separate. `CLAUDE_LOCAL_ISOLATE_CONFIG=0` opts out.
+  `forceLoginMethod` does not help here; it was tried and changes nothing.
 - All model role env vars (`ANTHROPIC_MODEL`, `*_OPUS_MODEL`, `*_SONNET_MODEL`,
   `*_HAIKU_MODEL`, `*_FABLE_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`) point at the
   same alias. Only one model is loaded.

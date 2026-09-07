@@ -141,12 +141,22 @@ Claude Code refreshes its stored claude.ai login on startup even when
 This is noise, not the ten minutes — the same screenshot shows the turn
 finishing in 0 s. But it is red text on every launch.
 
-`CLAUDE_LOCAL_ISOLATE_CONFIG=1` gives claude-local its own `CLAUDE_CONFIG_DIR`,
-which holds no login, so no refresh is attempted. Verified against a stub
-endpoint: with an isolated config dir the only path Claude Code touches is
-`/v1/messages`, and neither the OAuth warning nor the connectors warning
-appears. It is off by default because an isolated config dir also hides your
-`~/.claude` global `CLAUDE.md`, settings, skills and history.
+**Fixed**: `claude-local` now runs Claude Code with its own `CLAUDE_CONFIG_DIR`
+(`~/.config/claude-local/claude-home`), which holds no login, so no refresh is
+attempted. Verified against a stub endpoint: with the isolated dir the only path
+Claude Code touches is `/v1/messages`, and neither the OAuth warning nor the
+connectors warning appears.
+
+The isolation is made free rather than accepted as a cost. `setup_config_dir`
+symlinks `CLAUDE.md`, `settings.json`, `skills`, `output-styles`, `plugins`,
+`hooks` and `agents` from `~/.claude`, and `scripts/seed_config.py` copies the
+onboarding flags and the `hasTrustDialogAccepted` entries already in
+`~/.claude.json` — no new folder trust is granted. Only session history is
+genuinely separate, which keeps local-model transcripts out of the hosted ones;
+`diagnose` reads both. `CLAUDE_LOCAL_ISOLATE_CONFIG=0` opts out.
+
+`forceLoginMethod: "console"` in a settings file was tried first and does
+nothing here — the claude.ai login warning is identical with and without it.
 
 To confirm the refresh really is hitting the local server rather than
 Anthropic, look for an `oauth` line in `~/.cache/claude-local/server.log`;

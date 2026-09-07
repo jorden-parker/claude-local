@@ -101,6 +101,36 @@ short turn is the proxy.
 `claude-local dashboard --mock` shows fake data for checking the page on a
 machine without Rapid-MLX. Port override: `CLAUDE_LOCAL_DASHBOARD_PORT`.
 
+## Its own config dir
+
+Claude Code refreshes its stored claude.ai login on startup even when
+`ANTHROPIC_API_KEY` is set. The token endpoint is `/v1/oauth/token`, and with
+`ANTHROPIC_BASE_URL` pointed at rapid-mlx the refresh lands on the local server,
+which 404s it. Every launch then opens with:
+
+```
+API Error: User OAuth refresh failed (HTTP 404):
+{"error":{"message":"Not Found","type":"not_found_error","code":null,"param":null}}
+```
+
+So `claude-local` runs Claude Code with its own config dir,
+`~/.config/claude-local/claude-home`. No login is stored there, so no refresh is
+attempted and the banner is gone.
+
+To keep that from costing anything, the launcher shares the read-only halves of
+`~/.claude` into it as symlinks on every run — `CLAUDE.md`, `settings.json`,
+`skills`, `output-styles`, `plugins`, `hooks`, `agents` — and
+`scripts/seed_config.py` copies forward your onboarding flags plus the
+`hasTrustDialogAccepted` entries already in `~/.claude.json`. No new folder
+trust is granted: a folder you have never trusted still prompts.
+
+What stays separate is session history, which is a feature — local-model
+transcripts do not mix with your hosted Claude Code ones. `claude-local
+diagnose` reads both locations.
+
+`CLAUDE_LOCAL_ISOLATE_CONFIG=0` goes back to the shared `~/.claude`, banner and
+all. `CLAUDE_LOCAL_CONFIG_DIR` puts the isolated dir somewhere else.
+
 ## Diagnose a slow turn
 
 ```sh
@@ -159,14 +189,8 @@ profile block at the top of `claude-local`. Env vars win over the file.
 - `CLAUDE_LOCAL_EFFORT`: `low`, `medium`, `high`, `xhigh`.
 - `CLAUDE_LOCAL_PORT`: server port, default `8000`. `CLAUDE_LOCAL_DASHBOARD_PORT`: default `8001`.
 - `CLAUDE_LOCAL_SPEC_DECODE=0` (or `SPEC_DECODE=0` in the profile): drop `--speculative-config`, for A/B testing MTP.
-- `CLAUDE_LOCAL_ISOLATE_CONFIG=1`: give claude-local its own `CLAUDE_CONFIG_DIR`
-  (default `~/.config/claude-local/claude-home`, override with
-  `CLAUDE_LOCAL_CONFIG_DIR`). Use it if you see
-  `User OAuth refresh failed (HTTP 404)` at launch: Claude Code refreshes its
-  stored claude.ai login even when `ANTHROPIC_API_KEY` is set, and with
-  `ANTHROPIC_BASE_URL` pointed at rapid-mlx that refresh 404s. An isolated
-  config dir has no stored login to refresh. Off by default, because it also
-  hides your `~/.claude` global `CLAUDE.md`, settings, skills and history.
+- `CLAUDE_LOCAL_ISOLATE_CONFIG=0`: turn off the separate `CLAUDE_CONFIG_DIR`
+  (see "Its own config dir" below). `CLAUDE_LOCAL_CONFIG_DIR` moves it.
 - `SERVE_FLAGS` (in the script): see `rapid-mlx serve --help`.
 
 Context: Rapid-MLX serves the model's native 256k window. Claude Code is capped

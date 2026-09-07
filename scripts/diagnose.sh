@@ -39,6 +39,9 @@ EFFORT="${CLAUDE_LOCAL_EFFORT:-${EFFORT:-low}}"
 BASE_URL="http://127.0.0.1:${PORT}"
 LOG_FILE="${HOME}/.cache/claude-local/server.log"
 PID_FILE="${HOME}/.cache/claude-local/server.pid"
+# claude-local runs Claude Code with its own CLAUDE_CONFIG_DIR by default, so
+# local-model transcripts land there rather than in ~/.claude.
+CONFIG_DIR="${CLAUDE_LOCAL_CONFIG_DIR:-${HOME}/.config/claude-local/claude-home}"
 
 OUT="diagnose-$(date +%Y%m%d-%H%M%S).txt"
 exec > >(tee "$OUT") 2>&1
@@ -71,13 +74,20 @@ echo "rapid-mlx: $(have rapid-mlx && rapid-mlx --version 2>&1 | head -1 || echo 
 # Claude Code writes one JSON line per turn with exact usage. This is the only
 # exact record of thinking tokens; rapid-mlx does not expose them.
 hr "2. last local-model turns, from Claude Code's own transcript"
-python3 - "$MODEL" <<'PY'
+python3 - "$MODEL" "$CONFIG_DIR" <<'PY'
 import glob, json, os, sys
 from datetime import datetime
 
 want = sys.argv[1].lower()
+# Both homes: the isolated one claude-local uses by default, and ~/.claude for
+# runs made with CLAUDE_LOCAL_ISOLATE_CONFIG=0 (or before that default landed).
+homes = [sys.argv[2], os.path.expanduser("~/.claude")]
+transcripts = []
+for home in homes:
+    transcripts.extend(glob.glob(os.path.join(home, "projects", "*", "*.jsonl")))
+
 rows = []
-for path in glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl")):
+for path in transcripts:
     prev_t = None
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -95,7 +105,7 @@ for path in glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl")):
                         t = None
                 msg = e.get("message") or {}
                 model = str(msg.get("model") or "")
-                if e.get("type") == "assistant" and (want in model.lower() or "qwen" in model.lower()):
+                if e.get("type") == "assistant" and model:
                     u = msg.get("usage") or {}
                     content = msg.get("content") or []
                     think_chars = sum(len(b.get("thinking") or "") for b in content
@@ -119,12 +129,39 @@ for path in glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl")):
     except OSError:
         continue
 
+# Prefer turns whose model is the alias we are diagnosing. If none match, fall
+# back to any non-Anthropic model id, because a local server can report itself
+# under a name this script did not predict.
+def is_local(model):
+    m = model.lower()
+    return want in m or "qwen" in m
+
+
+primary = [r for r in rows if is_local(r["model"])]
+if primary:
+    rows = primary
+else:
+    fallback = [r for r in rows
+                if not r["model"].lower().startswith("claude")
+                and r["model"] != "<synthetic>"]
+    if fallback:
+        names = sorted({r["model"] for r in fallback})
+        print(f"no turns matched '{want}'; falling back to non-Anthropic model")
+        print(f"ids found in the transcripts: {', '.join(names[:5])}\n")
+        rows = fallback
+    else:
+        rows = []
+
 if not rows:
     print("no transcript turns found for a local model.")
-    print("looked in ~/.claude/projects/*/*.jsonl for message.model matching")
-    print(f"'{want}' or 'qwen'. If you have run claude-local at all, the model")
-    print("name in the transcript is the answer to a different question -- paste")
-    print("this instead:  grep -ho '\"model\":\"[^\"]*\"' ~/.claude/projects/*/*.jsonl | sort | uniq -c")
+    print(f"looked in {len(transcripts)} transcript file(s) under:")
+    for home in homes:
+        print(f"  {home}/projects/*/*.jsonl")
+    print(f"for message.model matching '{want}' or 'qwen'. If you have run")
+    print("claude-local, the model name recorded there answers a different")
+    print("question -- paste the output of:")
+    print("  grep -ho '\"model\":\"[^\"]*\"' " + " ".join(
+        f"{h}/projects/*/*.jsonl" for h in homes) + " | sort | uniq -c")
     raise SystemExit(0)
 
 BRIEF = os.environ.get("BRIEF") == "1"
